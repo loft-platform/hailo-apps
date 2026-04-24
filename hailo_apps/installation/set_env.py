@@ -171,12 +171,14 @@ def _get_tappas_version() -> str:
 
 def _get_model_zoo_version(hailo_arch: str, hailort_version: str = "") -> str:
     """Get Model Zoo version based on Hailo architecture and HailoRT version.
-    
-    For H10: Derives from HailoRT version (5.1.x -> v5.1.0, 5.2.x -> v5.2.0)
+
+    For H10: Derives from HailoRT version
+        5.1.x -> v5.1.0, 5.2.x -> v5.2.0, 5.3.x -> v5.3.0
     For H8/H8L: Uses static mapping v2.17.0
     """
     if hailo_arch == HAILO10H_ARCH:
-        # H10: Derive from HailoRT version
+        if hailort_version.startswith("5.3"):
+            return "v5.3.0"
         if hailort_version.startswith("5.2"):
             return "v5.2.0"
         return "v5.1.0"  # Default for 5.1.x
