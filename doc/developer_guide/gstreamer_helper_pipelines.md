@@ -108,7 +108,7 @@ Creates a GStreamer pipeline string for the video source with frame rate control
 - **RPI cameras** (`rpi*`): Uses `appsrc` for Raspberry Pi camera interface
 - **LibCamera** (`libcamera*`): Uses `libcamerasrc` element. Note: Requires installation of the plugin.
 - **XImage** (`0x*`): Uses `ximagesrc` for X11 screen capture
-- **RTSP streams** (`rtsp://*`): Uses `rtspsrc` for network streams
+- **RTSP streams** (`rtsp://*`): Uses `rtspsrc` for network streams. See [RTSP options](#rtsp-options) below.
 - **File sources**: Uses `filesrc` with `decodebin` for video files
 
 **Example:**
@@ -133,6 +133,30 @@ source = SOURCE_PIPELINE(video_source="input.mp4")
 ```
 
 > **Note for pipeline apps:** When building a pipeline app that inherits from `GStreamerApp`, prefer using `self.get_source_pipeline()` instead of calling `SOURCE_PIPELINE()` directly. This automatically passes common settings (including `--horizontal-mirror` and `--vertical-mirror` CLI flags) from the app instance. See [GStreamerApp.get_source_pipeline](#gstreamerappget_source_pipeline) below.
+
+#### RTSP options
+
+The `rtsp` source type is configured for production network reliability. The pipeline includes:
+
+| Option | Value | Purpose |
+|---|---|---|
+| `protocols=tcp` | TCP | Production networks (Wi-Fi, corporate NAT) commonly drop or mangle UDP RTSP. TCP transport is mandatory; UDP is intentionally not negotiated. |
+| `latency=200` | 200 ms | Smooths network jitter without being human-perceptible. Lower (50–100 ms) is fine on stable wired ethernet; raise on flaky links. |
+| `tcp-timeout=5000000` | 5 s | TCP socket dead-band (microseconds). |
+| `retry=5` | 5 attempts | Reconnect attempts after the camera drops (e.g. after a power blip), so multi-hour unattended runs survive transient failures. |
+| `drop-on-latency=true` | enabled | Drop late buffers instead of letting the queue grow unbounded; keeps the pipeline responsive over long runs. |
+| `application/x-rtp,media=video` | capsfilter | IP cameras typically publish video AND audio RTP streams. The capsfilter selects only the video stream so `decodebin` doesn't choke on the audio RTP. |
+| `decodebin` | auto codec | Auto-negotiates H.264 / H.265 / MJPEG. Any IP camera class (Hikvision, Dahua, Axis, generic ONVIF) works without changing the pipeline. |
+
+To verify a camera URL end-to-end before integrating it into an app:
+
+```bash
+gst-launch-1.0 rtspsrc location=rtsp://user:pass@camera-ip:554/stream \
+  latency=200 protocols=tcp tcp-timeout=5000000 retry=5 drop-on-latency=true \
+  ! application/x-rtp,media=video ! decodebin ! videoconvert ! fakesink
+```
+
+If the pipeline reaches `PLAYING` and the runtime counter advances, the camera is reachable and the codec is supported.
 
 ### GStreamerApp.get_source_pipeline
 
