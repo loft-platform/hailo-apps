@@ -155,7 +155,8 @@ class GStreamerFaceRecognitionApp(GStreamerApp):
             self.connect_vector_db_callback()
         else:  # train
             self.connect_train_vector_db_callback()
-        self.track_id_frame_count = {}  # Dictionary to track frame counts for each track ID - avoid porocessing first frames since usually they are blurry since person just entered the frame 
+        self.track_id_frame_count = {} 
+        self.identity_cache = {} # Dictionary to track frame counts for each track ID - avoid porocessing first frames since usually they are blurry since person just entered the frame 
         self.tracker = HailoTracker.get_instance()  # tracker object
 
         # region worker queue threads for saving images
@@ -195,7 +196,8 @@ class GStreamerFaceRecognitionApp(GStreamerApp):
         source_pipeline = self.get_source_pipeline()
         detection_pipeline = INFERENCE_PIPELINE(hef_path=self.hef_path_detection, post_process_so=self.post_process_so_scrfd, post_function_name=self.detection_func, batch_size=self.batch_size, config_json=get_resource_path(pipeline_name=None, resource_type=RESOURCES_JSON_DIR_NAME, arch=self.arch, model=FACE_DETECTION_JSON_NAME))
         detection_pipeline_wrapper = INFERENCE_PIPELINE_WRAPPER(detection_pipeline)
-        tracker_pipeline = TRACKER_PIPELINE(class_id=-1, kalman_dist_thr=0.7, iou_thr=0.8, init_iou_thr=0.9, keep_new_frames=2, keep_tracked_frames=6, keep_lost_frames=8, keep_past_metadata=True, name='hailo_face_tracker')
+        # tracker_pipeline = TRACKER_PIPELINE(class_id=-1, kalman_dist_thr=0.95, iou_thr=0.5, init_iou_thr=0.5, keep_new_frames=10, keep_tracked_frames=60, keep_lost_frames=60, keep_past_metadata=True, name='hailo_face_tracker')
+        tracker_pipeline = TRACKER_PIPELINE(class_id=-1,kalman_dist_thr=0.9,iou_thr=0.4,init_iou_thr=0.3,keep_new_frames=10,keep_tracked_frames=500,keep_lost_frames=400,keep_past_metadata=True,name='hailo_face_tracker')
         mobile_facenet_pipeline = INFERENCE_PIPELINE(hef_path=self.hef_path_recognition, post_process_so=self.post_process_so_face_recognition, post_function_name=self.recognition_func, batch_size=self.batch_size, config_json=None, name='face_recognition_inference')
         cropper_pipeline = CROPPER_PIPELINE(inner_pipeline=(f'hailofilter so-path={self.post_process_so_face_align} '
                                                             f'name=face_align_hailofilter use-gst-buffer=true qos=false ! '
@@ -204,13 +206,13 @@ class GStreamerFaceRecognitionApp(GStreamerApp):
                                             so_path=self.post_process_so_cropper, function_name=self.cropper_func, internal_offset=True)
         vector_db_callback_pipeline = USER_CALLBACK_PIPELINE(name=self.vector_db_callback_name)  # 'identity name' - is a GStreamer element that does nothing, but allows to add a probe to it
         user_callback_pipeline = USER_CALLBACK_PIPELINE()
-        display_pipeline = DISPLAY_PIPELINE(video_sink=self.video_sink, sync=self.sync, show_fps=self.show_fps)
+        display_pipeline = DISPLAY_PIPELINE(video_sink="fakesink", sync=self.sync, show_fps=self.show_fps)
 
         if self.options_menu.mode == 'train':
             source_pipeline = (f"multifilesrc location={self.current_file} loop=true num-buffers=30 ! "  # each image 30 times
                                f"decodebin ! videoconvert n-threads=4 qos=false ! video/x-raw, format=RGB, pixel-aspect-ratio=1/1 ")
             vector_db_callback_pipeline = USER_CALLBACK_PIPELINE(name=self.train_vector_db_callback_name)
-            display_pipeline = DISPLAY_PIPELINE(video_sink=self.video_sink, sync=self.sync, show_fps=self.show_fps)
+            display_pipeline = DISPLAY_PIPELINE(video_sink="fakesink", sync=self.sync, show_fps=self.show_fps)
 
         return (
             f'{source_pipeline} ! '
@@ -354,8 +356,80 @@ class GStreamerFaceRecognitionApp(GStreamerApp):
         
         # for each face detection
         for detection in (d for d in roi.get_objects_typed(hailo.HAILO_DETECTION) if d.get_label() == 'face'):
+            bbox = detection.get_bbox()
+
+            face_width = (bbox.xmax() - bbox.xmin()) * width
+            face_height = (bbox.ymax() - bbox.ymin()) * height
+            face_area = face_width * face_height
+
+            if face_area < self.algo_params["min_face_pixels_tolerance"]:
+                continue
             track_id = detection.get_objects_typed(hailo.HAILO_UNIQUE_ID)[0].get_id() if detection.get_objects_typed(hailo.HAILO_UNIQUE_ID) else None
             
+            # Clean expired cached identities
+            # current_time = time.time()
+
+            # expired_track_ids = []
+
+            # for cached_track_id, cached_data in self.identity_cache.items():
+            #     if current_time - cached_data["time"] > 5:
+            #         expired_track_ids.append(cached_track_id)
+  
+
+            # for expired_track_id in expired_track_ids:
+            #     del self.identity_cache[expired_track_id]
+
+            #     if expired_track_id in self.track_id_frame_count:
+            #         del self.track_id_frame_count[expired_track_id]
+
+            # Use cache if available
+            # if track_id in self.identity_cache:
+            #     cached = self.identity_cache[track_id]
+
+            #     classification = detection.get_objects_typed(
+            #         hailo.HAILO_CLASSIFICATION
+            #     )
+
+            #     if not classification:
+            #         new_classification = hailo.HailoClassification(
+            #             type='face_recon',
+            #             label=cached["label"],
+            #             confidence=cached["confidence"]
+            #         )
+            #         detection.add_object(new_classification)
+
+
+            # ================= FORCE TRACK IDENTITY =================
+            if track_id in self.identity_cache:
+
+                cached = self.identity_cache[track_id]
+
+                # remove any existing classification
+                old_cls = detection.get_objects_typed(hailo.HAILO_CLASSIFICATION)
+                if old_cls:
+                    detection.remove_object(old_cls[0])
+
+                forced_cls = hailo.HailoClassification(
+                    type='face_recon',
+                    label=cached["label"],
+                    confidence=cached["confidence"]
+                )
+
+                detection.add_object(forced_cls)
+
+                # keep tracker synced
+                tracker_name = self.tracker.get_trackers_list()[0]
+                self.tracker.add_object_to_track(
+                    tracker_name,
+                    track_id,
+                    forced_cls
+                )
+
+                # IMPORTANT → skip recognition
+                continue
+
+                
+            # ==================================================
             # still in the skip frames period -skip
             if self.track_id_frame_count.get(track_id, 0) < self.skip_frames:
                 self.track_id_frame_count[track_id] = self.track_id_frame_count.get(track_id, 0) + 1
@@ -372,22 +446,61 @@ class GStreamerFaceRecognitionApp(GStreamerApp):
                 continue
             # exactly single embedding is expected, so we can safely remove it from the detection
             embedding_vector = np.array(embedding[0].get_data())
-            person = self.db_handler.search_record(embedding=embedding_vector)  # most time consuming operation - search the database for the person with the closest embedding
-            new_confidence = (1-person['_distance'])
+
+            # Search database
+            # person = self.db_handler.search_record(embedding=embedding_vector)
+            person = self.db_handler.search_record(embedding=embedding_vector)
+
+            # ===================== FINAL FIX =====================
+            # If recognition failed → NEVER overwrite known identity
+            # if person is None:
+            #     continue
+            # =====================================================
+
+            # ---------- FIX START ----------
+            new_confidence = 0
+            if person:
+                new_confidence = 1 - person['_distance']
+
+
+
+            # Cache identity
+            if person and new_confidence > self.lance_db_vector_search_classificaiton_confidence_threshold:
+                self.identity_cache[track_id] = {
+                    "label": person['label'],
+                    "confidence": new_confidence,
+                    "time": time.time()
+                }
+ 
+            # Update classification
             classification = detection.get_objects_typed(hailo.HAILO_CLASSIFICATION)
+
             if not classification or classification[0].get_confidence() < new_confidence:
                 if classification:
                     detection.remove_object(classification[0])
                 new_classification = hailo.HailoClassification(type='face_recon', label=person['label'], confidence=new_confidence)
                 detection.add_object(new_classification)
-                self.tracker.remove_classifications_from_track(tracker_name, track_id, 'face_recon')
+                # self.tracker.remove_classifications_from_track(tracker_name, track_id, 'face_recon')
                 self.tracker.add_object_to_track(tracker_name, track_id, new_classification)
-            
+
             # anyway re-process for "double-check" after self.skip_frames X 3
-            self.track_id_frame_count[track_id] = -3 * self.skip_frames  
-            if self.user_data.telegram_enabled:  # adding task to the worker queue
+            # self.track_id_frame_count[track_id] = 0
+            self.track_id_frame_count[track_id] = self.skip_frames
+            if hasattr(self.user_data, "mqtt_enabled") and self.user_data.mqtt_enabled:
                 self.add_task('send_notification', name=person['label'], global_id=track_id, confidence=new_confidence, frame=frame)
 
+            # -------- Remove old tracks from cache --------
+            active_tracks = set()
+
+            for d in roi.get_objects_typed(hailo.HAILO_DETECTION):
+                ids = d.get_objects_typed(hailo.HAILO_UNIQUE_ID)
+                if ids:
+                    active_tracks.add(ids[0].get_id())
+
+            for cached_id in list(self.identity_cache.keys()):
+                if cached_id not in active_tracks:
+                    del self.identity_cache[cached_id]
+        # ----------------------------------------------
         return Gst.PadProbeReturn.OK
     
     def train_vector_db_callback(self, pad, info, user_data):

@@ -174,10 +174,10 @@ SIMPLE_DETECTION_POSTPROCESS_FUNCTION = "filter"
 # Detection pipeline defaults
 DETECTION_APP_TITLE = "Hailo Detection App"
 DETECTION_PIPELINE = "detection"
-DETECTION_MODEL_NAME_H8 = "yolov8m"
-DETECTION_MODEL_NAME_H8L = "yolov8s"
+DETECTION_MODEL_NAME_H8 = "yolov6n"
+DETECTION_MODEL_NAME_H8L = "yolov6n"
 DETECTION_POSTPROCESS_SO_FILENAME = "libyolo_hailortpp_postprocess.so"
-DETECTION_POSTPROCESS_FUNCTION = "filter_letterbox"
+DETECTION_POSTPROCESS_FUNCTION = "filter"
 
 # Instance segmentation pipeline defaults
 INSTANCE_SEGMENTATION_APP_TITLE = "Hailo Instance Segmentation App"
@@ -305,7 +305,7 @@ CAMERA_KEYWORDS = ["usb", "rpi"]
 BASIC_PIPELINES_VIDEO_EXAMPLE_NAME = "example.mp4"
 
 # Gstreamer pipeline defaults
-GST_VIDEO_SINK = "autovideosink"
+GST_VIDEO_SINK = "fakesink"
 
 # Gen AI app defaults
 VLM_CHAT_APP = "vlm_chat"

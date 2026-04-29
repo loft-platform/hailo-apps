@@ -163,41 +163,21 @@ def SOURCE_PIPELINE(
             f"ximagesrc xid={video_source} ! {QUEUE(name=f'{name}queue_scale_')} ! videoscale ! "
         )
     elif source_type == 'rtsp':  # RTSP stream handling
-        # Booth-grade RTSP intake. See doc/developer_guide/
-        # gstreamer_helper_pipelines.md for the rationale behind each
-        # rtspsrc option.
-        #
-        #   protocols=tcp           Production networks (Wi-Fi, corporate
-        #                           NAT) commonly drop or mangle UDP RTSP.
-        #                           TCP is mandatory for reliability.
-        #   latency=200             Smooths network jitter without being
-        #                           human-perceptible. Lower (50-100) is
-        #                           fine on stable wired ethernet.
-        #   tcp-timeout=5000000     5 s TCP socket dead-band (microseconds).
-        #   retry=5                 Reconnect attempts after the camera
-        #                           drops (e.g. after a power blip).
-        #   drop-on-latency=true    Drop late buffers instead of letting
-        #                           the queue grow unbounded; keeps the
-        #                           pipeline responsive over multi-hour
-        #                           runs.
-        #   name={name}             Named handle so we can reference its
-        #                           dynamic source pad below.
-        #
-        # `{name}. ! application/x-rtp,media=video` is the dynamic-pad
-        # back-reference + a video-only capsfilter. IP cameras typically
-        # publish video AND audio RTP streams; without the capsfilter
-        # `decodebin` chokes on the audio stream. `decodebin` then
-        # auto-negotiates H.264 / H.265 / MJPEG so any IP camera class
-        # works out of the box.
         source_element = (
-            f'rtspsrc location="{video_source}" '
-            f'latency=200 protocols=tcp '
-            f'tcp-timeout=5000000 retry=5 drop-on-latency=true '
-            f'name={name} '
-            f'{name}. ! application/x-rtp,media=video ! '
-            f'{QUEUE(name=f"{name}_queue_decode")} ! '
-            f'decodebin name={name}_decodebin ! '
-        )
+        f'rtspsrc location="{video_source}" latency=200 protocols=tcp name={name} '
+        f'{name}. ! application/x-rtp,media=video ! '
+        f'{QUEUE(name=f"{name}_queue_decode")} ! '
+        f'decodebin name={name}_decodebin ! '
+    )
+
+    # elif source_type == 'rtsp':  # STABLE RTSP PIPELINE
+    #     source_element = (
+    #         f'rtspsrc location="{video_source}" latency=0 protocols=tcp name={name} '
+    #         f'{name}. ! application/x-rtp,media=video,encoding-name=H264 ! '
+    #         f'rtph264depay ! '
+    #         f'h264parse ! '
+    #         f'avdec_h264 ! '
+    #     )
     elif source_type == 'udp':  # UDP stream handling (e.g., Gazebo camera)
         # Extract port from udp://host:port or udp://:port
         port = video_source.split(':')[-1]
